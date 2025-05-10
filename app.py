@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
+from pytube import YouTube
 import logging
 
 # Konfiguracja logowania
@@ -20,6 +21,46 @@ app.add_middleware(
 )
 
 # Strona główna
+@app.get("/check_video/{video_id}")
+async def check_video(video_id: str):
+    """
+    Sprawdza dostępność filmu na YouTube.
+    Zwraca informacje o filmie i dostępnych transkrypcjach.
+    """
+    try:
+        # Pobierz informacje o filmie
+        yt = YouTube(f"https://www.youtube.com/watch?v={video_id}")
+        
+        # Pobierz dostępne transkrypcje
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            transcripts = [{
+                'language': t.language,
+                'language_code': t.language_code,
+                'is_generated': t.is_generated
+            } for t in transcript_list]
+            has_transcripts = True
+        except Exception as e:
+            transcripts = []
+            has_transcripts = False
+        
+        return {
+            'video_id': video_id,
+            'title': yt.title,
+            'length': yt.length,
+            'views': yt.views,
+            'author': yt.author,
+            'publish_date': str(yt.publish_date) if yt.publish_date else None,
+            'is_age_restricted': yt.age_restricted,
+            'has_transcripts': has_transcripts,
+            'available_transcripts': transcripts
+        }
+        
+    except Exception as e:
+        error_msg = f"Nie można pobrać informacji o filmie: {str(e)}"
+        logger.error(error_msg)
+        raise HTTPException(status_code=400, detail=error_msg)
+
 @app.get("/")
 def home():
     return HTMLResponse("""
@@ -92,9 +133,13 @@ async def get_transcript(
         logger.warning(error_msg)
         raise HTTPException(status_code=404, detail=error_msg)
         
-    except VideoUnavailable:
-        error_msg = f"Film {video_id} jest niedostępny"
-        logger.warning(error_msg)
+    except VideoUnavailable as e:
+        error_msg = f"Film {video_id} jest niedostępny lub nie można go odtworzyć. Możliwe przyczyny:\n"
+        error_msg += "1. Film został usunięty lub jest prywatny\n"
+        error_msg += "2. Są ograniczenia geograficzne\n"
+        error_msg += "3. YouTube blokuje żądania z tego serwera\n\n"
+        error_msg += f"Szczegóły: {str(e)}"
+        logger.warning(f"VideoUnavailable dla {video_id}: {str(e)}")
         raise HTTPException(status_code=404, detail=error_msg)
         
     except Exception as e:
