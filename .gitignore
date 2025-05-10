@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.env
+*.db
+*.sqlite3
+*.log
+temp/
+*.mp3
+*.wav
+*.ogg
+.DS_Store
+.idea/
+.vscode/
