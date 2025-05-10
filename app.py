@@ -1,8 +1,23 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
+import logging
+
+# Konfiguracja logowania
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Konfiguracja CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Strona główna
 @app.get("/")
@@ -34,18 +49,55 @@ def home():
 
 # Endpoint do pobierania transkrypcji
 @app.get("/transcript")
-def get_transcript(video_id: str = Query(..., description="YouTube video ID")):
+async def get_transcript(
+    request: Request,
+    video_id: str = Query(..., description="YouTube video ID"),
+    lang: str = Query("en", description="Kod języka (np. 'pl', 'en')")
+):
     """
     Zwraca napisy (transkrypt) dla podanego ID filmu na YouTube w formacie JSON.
     """
+    logger.info(f"Pobieranie transkrypcji dla filmu {video_id} (język: {lang})")
+    
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        return JSONResponse(transcript)
+        # Pobierz listę dostępnych transkrypcji
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+        # Spróbuj pobrać transkrypcję w żądanym języku
+        try:
+            transcript = transcript_list.find_transcript([lang])
+        except:
+            # Jeśli nie ma w żądanym języku, użyj domyślnego
+            transcript = transcript_list.find_transcript(["en"])
+        
+        # Pobierz transkrypcję
+        transcript_data = transcript.fetch()
+        
+        # Logowanie sukcesu (bez wyświetlania pełnych danych)
+        logger.info(f"Pobrano transkrypcję dla filmu {video_id} (język: {transcript.language_code})")
+        
+        return JSONResponse({
+            "video_id": video_id,
+            "language": transcript.language_code,
+            "transcript": transcript_data
+        })
+        
     except TranscriptsDisabled:
-        raise HTTPException(status_code=404, detail="Transkrypcje są wyłączone dla tego filmu.")
+        error_msg = f"Transkrypcje są wyłączone dla filmu {video_id}"
+        logger.warning(error_msg)
+        raise HTTPException(status_code=404, detail=error_msg)
+        
     except NoTranscriptFound:
-        raise HTTPException(status_code=404, detail="Brak dostępnych transkryptów dla tego filmu.")
+        error_msg = f"Brak dostępnych transkryptów dla filmu {video_id}"
+        logger.warning(error_msg)
+        raise HTTPException(status_code=404, detail=error_msg)
+        
     except VideoUnavailable:
-        raise HTTPException(status_code=404, detail="Film jest niedostępny.")
+        error_msg = f"Film {video_id} jest niedostępny"
+        logger.warning(error_msg)
+        raise HTTPException(status_code=404, detail=error_msg)
+        
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Błąd: {e}")
+        error_msg = f"Wewnętrzny błąd serwera: {str(e)}"
+        logger.error(f"Błąd dla filmu {video_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
